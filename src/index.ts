@@ -19,6 +19,9 @@ mongoose
   .then(() => console.log("Conectado a MongoDB"))
   .catch((err) => console.error("Error conectando a MongoDB:", err));
   // Rutas
+  app.get("/", (req, res) => {
+    res.send("Servidor funcionando correctamente");
+  });
 app.use("/webhooks", instagramRouter);
 
 // Inicia el servidor
