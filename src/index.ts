@@ -19,10 +19,15 @@ mongoose
   .then(() => console.log("Conectado a MongoDB"))
   .catch((err) => console.error("Error conectando a MongoDB:", err));
   // Rutas
-  app.get("/", (req, res) => {
-    res.send("Servidor funcionando correctamente");
-  });
-app.use("/webhooks", instagramRouter);
+  app.use("/webhooks", instagramRouter);
+  app.get('/webhooks/instagram', (req, res) => {
+    const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = req.query;
+    if (mode && token && mode === 'subscribe' && token === process.env.VERIFY_TOKEN) {
+        res.status(200).send(challenge);
+    } else {
+        res.status(403).send('Forbidden');
+    }
+});
 
 // Inicia el servidor
 app.listen(PORT, () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
