@@ -1,3 +1,9 @@
+//Generar nuevo token long life si el servidor se cae luego de 60 dias (por expiracionde token)
+//TU_TOKEN_TEMPORAL lo puedes generar en la pagina api graph de fb
+//https://developers.facebook.com/tools/explorer/?method=GET&path=me%2Faccounts%3Ffields%3Dinstagram_business_account%7Bid%2Cusername%7D&version=v22.0
+//el resto lo tienes el .env ()
+// GET "https://graph.facebook.com/v22.0/oauth/access_token?grant_type=fb_exchange_token&client_id=TU_APP_ID&client_secret=TU_APP_SECRET&fb_exchange_token=TU_TOKEN_TEMPORAL"
+
 import express, { Request, Response } from "express";
 import axios from "axios";
 import cors from "cors";
@@ -13,25 +19,40 @@ app.use(cors());
 const APP_ID = process.env.FB_APP_ID as string;
 const APP_SECRET = process.env.FB_APP_SECRET as string;
 const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID as string;
-const TOKEN_STORAGE_PATH = "/tmp/token.json"; // Ruta segura para guardar el token en Vercel
+const TOKEN_STORAGE_PATH = "/tmp/token.json"; // Ruta segura en Vercel
 
-// **🔹 Función para leer el token desde /tmp/token.json**
-function getStoredAccessToken(): string {
-    try {
-      if (fs.existsSync(TOKEN_STORAGE_PATH)) {
-        const data = JSON.parse(fs.readFileSync(TOKEN_STORAGE_PATH, "utf8"));
-        if (data.accessToken) {
-          return data.accessToken;
-        }
-      }
-    } catch (error) {
-      console.error("❌ Error leyendo el token desde almacenamiento temporal:", error);
-    }
-    
-    console.log("⚠️ Usando el token de las variables de entorno.");
-    return process.env.FB_LONG_LIVED_ACCESS_TOKEN as string;
+const apiClient = axios.create({
+  baseURL: "https://graph.instagram.com", // API de Instagram correcta
+});
+
+// **🔹 Obtener el Token de Instagram desde el token de Facebook**
+async function getInstagramAccessToken(facebookAccessToken: string): Promise<string> {
+  try {
+    const url = `https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=${APP_SECRET}&access_token=${facebookAccessToken}`;
+    const response = await axios.get(url);
+    return response.data.access_token;
+  } catch (error) {
+    console.error("❌ Error obteniendo el token de Instagram:", error);
+    throw new Error("Error al obtener el token de Instagram.");
   }
-  
+}
+
+// **🔹 Leer el token desde /tmp/token.json**
+function getStoredAccessToken(): string {
+  try {
+    if (fs.existsSync(TOKEN_STORAGE_PATH)) {
+      const data = JSON.parse(fs.readFileSync(TOKEN_STORAGE_PATH, "utf8"));
+      if (data.accessToken) {
+        return data.accessToken;
+      }
+    }
+  } catch (error) {
+    console.error("❌ Error leyendo el token desde almacenamiento temporal:", error);
+  }
+
+  console.log("⚠️ Usando el token de las variables de entorno.");
+  return process.env.FB_LONG_LIVED_ACCESS_TOKEN as string;
+}
 
 // **🔹 Verificar si el token necesita renovación**
 function shouldRefreshToken(): boolean {
@@ -46,7 +67,7 @@ function shouldRefreshToken(): boolean {
   return diffInDays >= 55; // Renovar solo si han pasado 55 días o más
 }
 
-// **🔹 Función para renovar el token automáticamente**
+// **🔹 Renovar el token automáticamente**
 async function refreshAccessToken(): Promise<void> {
   try {
     if (!shouldRefreshToken()) {
@@ -54,19 +75,18 @@ async function refreshAccessToken(): Promise<void> {
       return;
     }
 
-    const ACCESS_TOKEN = getStoredAccessToken();
-    if (!ACCESS_TOKEN) throw new Error("❌ Token de acceso no encontrado en almacenamiento temporal.");
+    const FACEBOOK_ACCESS_TOKEN = getStoredAccessToken();
+    if (!FACEBOOK_ACCESS_TOKEN) throw new Error("❌ Token de Facebook no encontrado.");
 
-    const url = `https://graph.facebook.com/v22.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${APP_ID}&client_secret=${APP_SECRET}&fb_exchange_token=${ACCESS_TOKEN}`;
-    const response = await axios.get(url);
-    const newAccessToken: string = response.data.access_token;
+    console.log("🔄 Obteniendo nuevo token de Instagram...");
+    const INSTAGRAM_ACCESS_TOKEN = await getInstagramAccessToken(FACEBOOK_ACCESS_TOKEN);
 
-    console.log("🔄 Nuevo Token Renovado:", newAccessToken);
+    console.log("🔄 Nuevo Token de Instagram Renovado:", INSTAGRAM_ACCESS_TOKEN);
 
-    // **Guardar el token en almacenamiento temporal**
-    fs.writeFileSync(TOKEN_STORAGE_PATH, JSON.stringify({ accessToken: newAccessToken, lastRefresh: new Date().toISOString() }));
+    // **Guardar el token de Instagram en almacenamiento temporal**
+    fs.writeFileSync(TOKEN_STORAGE_PATH, JSON.stringify({ accessToken: INSTAGRAM_ACCESS_TOKEN, lastRefresh: new Date().toISOString() }));
 
-    console.log("✅ Token guardado en almacenamiento temporal.");
+    console.log("✅ Token de Instagram guardado en almacenamiento temporal.");
   } catch (error) {
     console.error("❌ Error al renovar el token:", error instanceof Error ? error.message : "Error desconocido");
   }
@@ -76,13 +96,29 @@ async function refreshAccessToken(): Promise<void> {
 app.get("/api/instagram-posts", async (req: Request, res: Response) => {
   try {
     const ACCESS_TOKEN = getStoredAccessToken();
-    if (!ACCESS_TOKEN) throw new Error("❌ Token de acceso no disponible");
+    if (!ACCESS_TOKEN) throw new Error("❌ Token de Instagram no disponible");
 
-    const url = `https://graph.instagram.com/${INSTAGRAM_ACCOUNT_ID}/media?fields=id,caption,media_type,media_url,permalink&access_token=${ACCESS_TOKEN}`;
-    const response = await axios.get(url);
+    const response = await apiClient.get(`/${INSTAGRAM_ACCOUNT_ID}/media`, {
+      params: {
+        fields: "id,caption,media_type,media_url,permalink",
+        access_token: ACCESS_TOKEN,
+      },
+    });
+
     res.json(response.data);
   } catch (error) {
-    res.status(500).json({ error: "❌ Error obteniendo imágenes de Instagram", details: error instanceof Error ? error.message : "Error desconocido" });
+    console.error("❌ Error en la solicitud a la API de Instagram:", error);
+
+    if (axios.isAxiosError(error)) {
+      res.status(500).json({
+        error: "❌ Error obteniendo imágenes de Instagram",
+        details: error.response?.data || error.message,
+      });
+    } else {
+      res.status(500).json({
+        error: "❌ Error desconocido en la API",
+      });
+    }
   }
 });
 
