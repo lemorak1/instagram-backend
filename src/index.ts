@@ -17,12 +17,21 @@ const TOKEN_STORAGE_PATH = "/tmp/token.json"; // Ruta segura para guardar el tok
 
 // **🔹 Función para leer el token desde /tmp/token.json**
 function getStoredAccessToken(): string {
-  if (fs.existsSync(TOKEN_STORAGE_PATH)) {
-    const data = JSON.parse(fs.readFileSync(TOKEN_STORAGE_PATH, "utf8"));
-    return data.accessToken;
+    try {
+      if (fs.existsSync(TOKEN_STORAGE_PATH)) {
+        const data = JSON.parse(fs.readFileSync(TOKEN_STORAGE_PATH, "utf8"));
+        if (data.accessToken) {
+          return data.accessToken;
+        }
+      }
+    } catch (error) {
+      console.error("❌ Error leyendo el token desde almacenamiento temporal:", error);
+    }
+    
+    console.log("⚠️ Usando el token de las variables de entorno.");
+    return process.env.FB_LONG_LIVED_ACCESS_TOKEN as string;
   }
-  return process.env.FB_LONG_LIVED_ACCESS_TOKEN as string; // Si no existe, usa el de las variables de entorno
-}
+  
 
 // **🔹 Verificar si el token necesita renovación**
 function shouldRefreshToken(): boolean {
